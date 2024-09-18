@@ -1,0 +1,4 @@
+[deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+EvoTrees = "f6006082-12f8-11e9-0c9c-0d5d367ab1e5"
+SpeciesDistributionToolkit = "72b53823-5c0b-4575-ad0e-8e97227ad13b"
