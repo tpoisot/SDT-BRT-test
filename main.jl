@@ -64,7 +64,7 @@ folds
 #
 include("confusion.jl")
 
-config = EvoTreeMLE(max_depth=8, nbins=64, eta=0.05, nrounds=100, L2=0.1, loss=:gaussian_mle)
+config = EvoTreeMLE(max_depth=9, nbins=64, eta=0.05, nrounds=120, L2=0.1, loss=:gaussian_mle)
 nobs, nfeats = size(X)
 T = LinRange(0.0, 1.0, 250)
 M = zeros(ConfusionMatrix, length(T), K)
@@ -145,4 +145,37 @@ for ax in filter(c -> c isa Axis, f.content)
     hidedecorations!(ax, label=false)
     hidespines!(ax)
 end
+current_figure()
+
+# Partial responses
+f = Figure()
+ax_maps = [Axis(f[i,1]; aspect=DataAspect()) for i in 1:3]
+ax_resp = [Axis(f[i,2]) for i in 1:3]
+for i in 1:3
+    mXp = copy(Xp)
+    for j in 1:3
+        if j != i
+            mXp[:,j] .= median(X[:,j])
+        end
+    end
+    pr1 = similar(layer[1], Float64)
+    pr1.grid[findall(pr1.indices)] .= EvoTrees.predict(model, mXp)[:,1]
+    heatmap!(ax_maps[i], pr1, colormap=:navia)
+
+    xx = LinRange(extrema(layer[i])..., 200)
+    prX = zeros(Float64, length(xx), 3)
+    for j in 1:3
+        if j != i
+            prX[:,j] .= median(X[:,j])
+        else
+            prX[:,j] .= xx
+        end
+    end
+    prpr = EvoTrees.predict(model, prX)
+    band!(ax_resp[i], xx, prpr[:,1].-prpr[:,2]./2, prpr[:,1].+prpr[:,2]./2, color=:grey, alpha=0.3)
+    lines!(ax_resp[i], xx, prpr[:,1], color=:black)
+end
+ylims!.(ax_resp, 0., 1.)
+hidedecorations!.(ax_maps)
+hidespines!.(ax_maps)
 current_figure()
