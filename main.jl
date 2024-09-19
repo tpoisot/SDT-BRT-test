@@ -29,7 +29,7 @@ end
 # Get some pseudo-absences
 presencelayer = mask(layer[1], presences)
 background = pseudoabsencemask(DistanceToEvent, presencelayer)
-bgpoints = backgroundpoints(background, 3sum(presencelayer))
+bgpoints = backgroundpoints(background, sum(presencelayer))
 
 heatmap(
     layer[2];
