@@ -164,4 +164,6 @@ end
 ylims!.(ax_resp, 0.0, 1.0)
 hidedecorations!.(ax_maps)
 hidespines!.(ax_maps)
+hidedecorations!.(ax_maps_2)
+hidespines!.(ax_maps_2)
 current_figure()
