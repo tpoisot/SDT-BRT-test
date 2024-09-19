@@ -3,23 +3,25 @@ using CairoMakie
 using EvoTrees
 using Random
 using Statistics
+using Dates
+CairoMakie.activate!(; px_per_unit=3)
 
 # Polygon
 CHE = SpeciesDistributionToolkit.gadm("CHE")
 
 # Data
-provider = RasterData(CHELSA2, BioClim)
+provider = RasterData(WorldClim2, BioClim)
 
 # Limits
-bbox = (left=5.0, right=12.0, bottom=45.0, top=50.0)
+bbox = (left=5.0, right=12.0, bottom=45.0, top=50.0, resolution=0.5)
 
 # Trim
-layer = [trim(SDMLayer(provider; layer=l, bbox...), CHE) for l in ["BIO2", "BIO5", "BIO14"]]
+layer = [trim(SDMLayer(provider; layer=l, bbox...), CHE) for l in ["BIO1", "BIO2", "BIO5", "BIO14"]]
 
 # GBIF
 ouzel = taxon("Turdus torquatus")
 gbif_query = ["occurrenceStatus" => "PRESENT", "limit" => 300]
-presences = occurrences(ouzel, layer[1], gbif_query... )
+presences = occurrences(ouzel, layer[1], gbif_query...)
 while length(presences) < count(presences)
     occurrences!(presences)
 end
@@ -31,12 +33,12 @@ bgpoints = backgroundpoints(background, 3sum(presencelayer))
 
 heatmap(
     layer[2];
-    colormap = :deep,
-    axis = (; aspect = DataAspect()),
-    figure = (; size = (800, 500)),
+    colormap=:deep,
+    axis=(; aspect=DataAspect()),
+    figure=(; size=(800, 500)),
 )
-scatter!(mask(presences, CHE); color = :black)
-scatter!(bgpoints; color = :red, markersize = 4)
+scatter!(mask(presences, CHE); color=:black)
+scatter!(bgpoints; color=:red, markersize=4)
 current_figure()
 
 # Prepare data to go in a BRT
@@ -48,13 +50,13 @@ y = [ones(Bool, sum(presencelayer))..., zeros(Bool, sum(bgpoints))...]
 
 # Shuffle (important)
 idx = shuffle(eachindex(y))
-X, y = X[idx,:,], y[idx]
+X, y = X[idx, :,], y[idx]
 
 # k-folds
 K = 10
 folds = []
 for k in 1:K
-    fold_validation = floor.(Int64, LinRange(k, length(y)+k, floor(Int64, length(y)/K)))
+    fold_validation = floor.(Int64, LinRange(k, length(y) + k, floor(Int64, length(y) / K)))
     filter!(x -> x <= length(y), fold_validation)
     fold_train = setdiff(eachindex(y), fold_validation)
     push!(folds, (fold_train, fold_validation))
@@ -64,83 +66,65 @@ folds
 #
 include("confusion.jl")
 
-config = EvoTreeMLE(max_depth=9, nbins=64, eta=0.05, nrounds=120, L2=0.1, loss=:gaussian_mle)
+config = EvoTreeMLE(max_depth=6, nbins=32, eta=0.05, nrounds=120, L2=0.1, loss=:gaussian_mle)
 nobs, nfeats = size(X)
 T = LinRange(0.0, 1.0, 250)
 M = zeros(ConfusionMatrix, length(T), K)
 for k in 1:K
-    model = fit_evotree(config; x_train=X[folds[k][1],:], y_train=y[folds[k][1]])
-    preds = EvoTrees.predict(model, X[folds[k][2],:])
+    model = fit_evotree(config; x_train=X[folds[k][1], :], y_train=y[folds[k][1]])
+    preds = EvoTrees.predict(model, X[folds[k][2], :])
     for i in eachindex(T)
-        M[i,k] = ConfusionMatrix(preds[:,1], y[folds[k][2]], Float32(T[i]))
+        M[i, k] = ConfusionMatrix(preds[:, 1], y[folds[k][2]], Float32(T[i]))
     end
 end
 
 # tuning curve
 f = Figure()
-ax = Axis(f[1,1])
+ax = Axis(f[1, 1])
 lines!(ax, T, vec(mean(mcc.(M); dims=2)))
 Tmax = T[last(findmax(vec(mean(mcc.(M); dims=2))))]
 current_figure()
 
 # ROC
 f = Figure()
-ax = Axis(f[1,1]; aspect=1)
+ax = Axis(f[1, 1]; aspect=1)
 for i in 1:K
-    lines!(ax, fpr.(M[:,i]), tpr.(M[:,i]), color=:black)
+    lines!(ax, fpr.(M[:, i]), tpr.(M[:, i]), color=:black)
 end
 current_figure()
 
-[auc(fpr.(M[:,k]), tpr.(M[:,k])) for k in 1:K]
+[auc(fpr.(M[:, k]), tpr.(M[:, k])) for k in 1:K]
 
 # PR
 f = Figure()
-ax = Axis(f[1,1]; aspect=1)
+ax = Axis(f[1, 1]; aspect=1)
 for i in 1:K
-    lines!(ax, tpr.(M[:,i]), ppv.(M[:,i]), color=:black)
+    lines!(ax, tpr.(M[:, i]), ppv.(M[:, i]), color=:black)
 end
 current_figure()
 
-[auc(tpr.(M[:,k]), ppv.(M[:,k])) for k in 1:K]
+[auc(tpr.(M[:, k]), ppv.(M[:, k])) for k in 1:K]
 
 Xp = Float32.([layer[i][k] for k in keys(layer[1]), i in eachindex(layer)])
 model = fit_evotree(config; x_train=X, y_train=y)
 preds = EvoTrees.predict(model, Xp)
 
 pr = similar(layer[1], Float64)
-pr.grid[findall(pr.indices)] .= preds[:,1]
+pr.grid[findall(pr.indices)] .= preds[:, 1]
 
 unc = similar(layer[1], Float64)
-unc.grid[findall(unc.indices)] .= preds[:,2]
-
-# Climate change
-_proj = Projection(SSP370, GFDL_ESM4)
-futurelayer = [trim(SDMLayer(provider, _proj; layer=l, bbox...), CHE) for l in ["BIO2", "BIO5", "BIO14"]]
-
-FXp = Float32.([futurelayer[i][k] for k in keys(futurelayer[1]), i in eachindex(futurelayer)])
-fpreds = EvoTrees.predict(model, FXp)
-
-prf = similar(futurelayer[1], Float64)
-prf.grid[findall(prf.indices)] .= fpreds[:,1]
+unc.grid[findall(unc.indices)] .= preds[:, 2]
 
 # Plot
 f = Figure(; size=(800, 600))
-ax_current = Axis(f[1,1]; aspect=DataAspect(), title="Historical data")
-ax_future = Axis(f[1,2]; aspect=DataAspect(), title="Future data")
-hm = heatmap!(ax_current, pr, colormap=:lipari, colorrange=(0,1))
-heatmap!(ax_future, prf, colormap=:lipari, colorrange=(0,1))
-Colorbar(f[1,3], hm)
-ax_current_range = Axis(f[2,1]; aspect=DataAspect())
-ax_future_range = Axis(f[2,2]; aspect=DataAspect())
-heatmap!(ax_current_range, pr .>= Tmax, colormap=[:lightgrey, :grey])
-heatmap!(ax_future_range, prf .>= Tmax, colormap=[:lightgrey, :grey])
-ax_gainloss = Axis(f[3,1]; aspect=DataAspect())
-rangemask = nodata!((pr.>=Tmax)|(prf.>=Tmax), false)
-heatmap!(ax_gainloss, pr, colormap=[:lightgrey, :lightgrey])
-heatmap!(ax_gainloss, mask(Int8.(prf.>=Tmax) - Int8.(pr.>=Tmax), rangemask), colormap=:roma)
-ax_unc = Axis(f[3,2]; aspect=DataAspect())
-hm2 = heatmap!(ax_unc, unc, colormap=[colorant"#000000ff",colorant"#ffffff00"])
-Colorbar(f[3,3], hm2)
+ax_current = Axis(f[1, 2]; aspect=DataAspect(), title="P(presence)")
+hm = heatmap!(ax_current, pr, colormap=:lipari, colorrange=(0, 1))
+Colorbar(f[1, 1], hm)
+ax_current_range = Axis(f[2, 2]; aspect=DataAspect())
+heatmap!(ax_current_range, pr .>= Tmax, colormap=[:lightgrey, :green])
+ax_unc = Axis(f[1, 3]; aspect=DataAspect(), title="Standard deviation")
+hm2 = heatmap!(ax_unc, unc, colormap=[colorant"#000000ff", colorant"#ffffff00"])
+Colorbar(f[1, 4], hm2)
 for ax in filter(c -> c isa Axis, f.content)
     hidedecorations!(ax, label=false)
     hidespines!(ax)
@@ -148,34 +132,36 @@ end
 current_figure()
 
 # Partial responses
-f = Figure()
-ax_maps = [Axis(f[i,1]; aspect=DataAspect()) for i in 1:3]
-ax_resp = [Axis(f[i,2]) for i in 1:3]
+f = Figure(; size=(900, 600))
+ax_maps = [Axis(f[i, 1]; aspect=DataAspect()) for i in 1:3]
+ax_maps_2 = [Axis(f[i, 3]; aspect=DataAspect()) for i in 1:3]
+ax_resp = [Axis(f[i, 2]) for i in 1:3]
 for i in 1:3
     mXp = copy(Xp)
     for j in 1:3
         if j != i
-            mXp[:,j] .= median(X[:,j])
+            mXp[:, j] .= mean(X[:, j])
         end
     end
     pr1 = similar(layer[1], Float64)
-    pr1.grid[findall(pr1.indices)] .= EvoTrees.predict(model, mXp)[:,1]
-    heatmap!(ax_maps[i], pr1, colormap=:navia)
+    pr1.grid[findall(pr1.indices)] .= EvoTrees.predict(model, mXp)[:, 1]
+    heatmap!(ax_maps[i], pr1, colormap=:navia, colorrange=(0, 1))
+    heatmap!(ax_maps_2[i], (pr1-pr)/(pr1+pr), colormap=:roma, colorrange=(-0.2, 0.2))
 
-    xx = LinRange(extrema(layer[i])..., 200)
+    xx = LinRange(extrema(layer[i])..., 300)
     prX = zeros(Float64, length(xx), 3)
     for j in 1:3
         if j != i
-            prX[:,j] .= median(X[:,j])
+            prX[:, j] .= mean(X[:, j])
         else
-            prX[:,j] .= xx
+            prX[:, j] .= xx
         end
     end
     prpr = EvoTrees.predict(model, prX)
-    band!(ax_resp[i], xx, prpr[:,1].-prpr[:,2]./2, prpr[:,1].+prpr[:,2]./2, color=:grey, alpha=0.3)
-    lines!(ax_resp[i], xx, prpr[:,1], color=:black)
+    band!(ax_resp[i], xx, prpr[:, 1] .- prpr[:, 2] ./ 2, prpr[:, 1] .+ prpr[:, 2] ./ 2, color=:grey, alpha=0.3)
+    lines!(ax_resp[i], xx, prpr[:, 1], color=:black)
 end
-ylims!.(ax_resp, 0., 1.)
+ylims!.(ax_resp, 0.0, 1.0)
 hidedecorations!.(ax_maps)
 hidespines!.(ax_maps)
 current_figure()
